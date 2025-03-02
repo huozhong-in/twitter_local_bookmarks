@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "remix vite:build",
-    "dev": "remix vite:dev '--host' '0.0.0.0'",
+    "dev": "remix vite:dev '--host' '127.0.0.1'",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
     "start": "remix-serve ./build/server/index.js",
     "typecheck": "tsc",
-    "p": "node node-sqlite3.js"
+    "clean": "rm -rf ./node_modules ./build"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.1.2",
@@ -49,5 +49,14 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "sqlite3"
+    ],
+    "ignoredBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
