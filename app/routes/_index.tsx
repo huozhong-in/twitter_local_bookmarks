@@ -1,6 +1,5 @@
 import React, { useState, ReactNode, Fragment, useEffect, useRef } from "react";
-import { json } from "@remix-run/node";
-import { useLoaderData, useSearchParams } from "@remix-run/react";
+import { useLoaderData, useSearchParams, Form, useActionData, useSubmit } from "@remix-run/react";
 import path from "path";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -13,7 +12,7 @@ import {
   CardFooter 
 } from "~/components/ui/card";
 import { Separator } from "~/components/ui/separator";
-import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
+import { Avatar } from "~/components/ui/avatar";
 
 interface Media {
   type: string;
@@ -32,7 +31,168 @@ interface SearchResult {
   created_at?: string;
   media?: Media | Media[];
 }
+interface TwitterBookmark {
+  id: string;
+  created_at: string;
+  full_text: string;
+  media: Media[];
+  screen_name: string;
+  name: string;
+  profile_image_url: string;
+  in_reply_to: any;
+  retweeted_status: any;
+  quoted_status: any;
+  favorite_count: number;
+  retweet_count: number;
+  bookmark_count: number;
+  quote_count: number;
+  reply_count: number;
+  views_count: number | null;
+  favorited: boolean;
+  retweeted: boolean;
+  bookmarked: boolean;
+  url: string;
+}
 
+// Upload handler for the server action
+export async function action({ request }: { request: Request }) {
+  try {
+    // Parse the form data
+    const formData = await request.formData();
+    const bookmarksFile = formData.get('bookmarksFile') as File;
+    
+    if (!bookmarksFile) {
+      return Response.json({ success: false, error: "No file uploaded" }, { status: 400 });
+    }
+    
+    // Check file type
+    if (!bookmarksFile.name.endsWith('.json')) {
+      return Response.json({ success: false, error: "Only JSON files are supported" }, { status: 400 });
+    }
+    
+    // Read the file content
+    const fileContent = await bookmarksFile.text();
+    let bookmarks: TwitterBookmark[];
+    
+    try {
+      bookmarks = JSON.parse(fileContent);
+      if (!Array.isArray(bookmarks)) {
+        return Response.json({ success: false, error: "Invalid JSON format: Expected an array of bookmarks" }, { status: 400 });
+      }
+    } catch (error) {
+      return Response.json({ success: false, error: "Invalid JSON format" }, { status: 400 });
+    }
+    
+    // Import the bookmarks into the database
+    const result = await importBookmarks(bookmarks);
+    
+    return Response.json(result);
+  } catch (error) {
+    console.error('Error processing upload:', error);
+    return Response.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : "An unknown error occurred" 
+    }, { status: 500 });
+  }
+}
+
+// Modified to accept bookmarks array as parameter
+async function importBookmarks(bookmarks: TwitterBookmark[]) {
+  try {
+    // Import the createRequire function to use require in ESM
+    const { createRequire } = await import('module');
+    const require = createRequire(import.meta.url);
+    
+    // Import better-sqlite3
+    const Database = require('better-sqlite3');
+    
+    // Connect to the SQLite database
+    const db = new Database('./sqlite.db');
+    
+    // Load the libsimple extension
+    const extPath = path.resolve("./lib");
+    const platform = process.platform;
+    if (platform === 'win32') {
+      db.loadExtension(path.join(extPath, "simple"));
+    } else {
+      db.loadExtension(path.join(extPath, "libsimple"));
+    }
+    
+    // Set the jieba dictionary path
+    const dictPath = path.join(extPath, "dict");
+    db.prepare("SELECT jieba_dict(?)").run(dictPath);
+    
+    // Begin a transaction for better performance
+    const transaction = db.transaction((bookmarks: TwitterBookmark[]) => {
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO twitter_bookmarks (
+          id, created_at, full_text, media, screen_name, name, profile_image_url,
+          in_reply_to, retweeted_status, quoted_status, favorite_count, retweet_count,
+          bookmark_count, quote_count, reply_count, views_count, favorited, retweeted,
+          bookmarked, url
+        ) VALUES (
+          @id, @created_at, @full_text, @media, @screen_name, @name, @profile_image_url,
+          @in_reply_to, @retweeted_status, @quoted_status, @favorite_count, @retweet_count,
+          @bookmark_count, @quote_count, @reply_count, @views_count, @favorited, @retweeted,
+          @bookmarked, @url
+        )
+      `);
+
+      for (const bookmark of bookmarks) {
+        stmt.run({
+          id: bookmark.id,
+          created_at: bookmark.created_at,
+          full_text: bookmark.full_text,
+          media: JSON.stringify(bookmark.media || []),
+          screen_name: bookmark.screen_name,
+          name: bookmark.name,
+          profile_image_url: bookmark.profile_image_url,
+          in_reply_to: JSON.stringify(bookmark.in_reply_to || null),
+          retweeted_status: JSON.stringify(bookmark.retweeted_status || null),
+          quoted_status: JSON.stringify(bookmark.quoted_status || null),
+          favorite_count: bookmark.favorite_count,
+          retweet_count: bookmark.retweet_count,
+          bookmark_count: bookmark.bookmark_count,
+          quote_count: bookmark.quote_count,
+          reply_count: bookmark.reply_count,
+          views_count: bookmark.views_count,
+          favorited: bookmark.favorited ? 1 : 0,
+          retweeted: bookmark.retweeted ? 1 : 0,
+          bookmarked: bookmark.bookmarked ? 1 : 0,
+          url: bookmark.url
+        });
+      }
+    });
+
+    // Execute the transaction
+    transaction(bookmarks);
+    
+    console.log(`Successfully imported ${bookmarks.length} bookmarks into the database.`);
+    
+    // Update the FTS table with the new bookmarks
+    // First, clear the FTS table to ensure consistency
+    db.exec(`DELETE FROM twitter_bookmarks_fts`);
+    
+    // Then repopulate it from the main table
+    db.exec(`
+      INSERT INTO twitter_bookmarks_fts(id, full_text, screen_name, name)
+      SELECT id, full_text, screen_name, name FROM twitter_bookmarks;
+    `);
+    
+    console.log(`Updated full-text search index with ${bookmarks.length} bookmarks.`);
+    
+    // Close the database connection
+    db.close();
+    
+    return { success: true, count: bookmarks.length };
+  } catch (error) {
+    console.error('Error importing bookmarks:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : "An unknown error occurred" 
+    };
+  }
+}
 // Helper function to decode HTML entities
 function decodeHTMLEntities(text: string): string {
   // Server-safe implementation that doesn't rely on document
@@ -363,12 +523,12 @@ export function InputWithButton({ onSearch }: { onSearch: (query: string) => voi
   return (
     <div className="flex w-full items-center space-x-2">
       <Input 
-        placeholder="Type your query here." 
+        placeholder="输入搜索关键词..." 
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
       />
-      <Button onClick={handleSearch}>Search</Button>
+      <Button onClick={handleSearch}>搜索</Button>
     </div>
   );
 }
@@ -379,7 +539,7 @@ export async function loader({ request }: { request: Request }) {
   const query = url.searchParams.get("q") || "";
   
   if (!query.trim()) {
-    return json({ results: [], error: null });
+    return Response.json({ results: [], error: null });
   }
   
   try {
@@ -389,9 +549,9 @@ export async function loader({ request }: { request: Request }) {
     // Import the createRequire function to use require in ESM
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
-    
-    // Now we can use require to import better-sqlite3
+  
     const Database = require('better-sqlite3');
+    // Now we can use require to import better-sqlite3
     const db = Database(dbPath);
     
     // Load the libsimple extension
@@ -453,10 +613,10 @@ export async function loader({ request }: { request: Request }) {
     // Close the database connection
     db.close();
     
-    return json({ results: processedResults, error: null });
+    return Response.json({ results: processedResults, error: null });
   } catch (error) {
     console.error("Search error:", error);
-    return json({ 
+    return Response.json({ 
       results: [], 
       error: error instanceof Error ? error.message : "An unknown error occurred" 
     });
@@ -465,9 +625,18 @@ export async function loader({ request }: { request: Request }) {
 
 export default function Index() {
   const { results, error } = useLoaderData<{ results: SearchResult[], error: string | null }>();
+  const actionData = useActionData<{ success: boolean, count?: number, error?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>(results || []);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importFeedback, setImportFeedback] = useState<{
+    show: boolean;
+    success: boolean;
+    message: string;
+  }>({ show: false, success: false, message: '' });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const submit = useSubmit();
   
   // Get the current query from URL search params
   const currentQuery = searchParams.get("q") || "";
@@ -488,6 +657,36 @@ export default function Index() {
       setIsLoading(false);
     }, 300);
   };
+  
+  // Handle file upload
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // Check if it's a JSON file
+    if (!file.name.endsWith('.json')) {
+      setImportFeedback({
+        show: true,
+        success: false,
+        message: 'Only JSON files are supported'
+      });
+      return;
+    }
+    
+    setIsImporting(true);
+    
+    // Create FormData and submit
+    const formData = new FormData();
+    formData.append('bookmarksFile', file);
+    submit(formData, { method: 'post', encType: 'multipart/form-data' });
+  };
+  
+  // Reset file input when upload is complete
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   // Get initials from name for avatar
   const getInitials = (name: string = ""): string => {
@@ -504,24 +703,109 @@ export default function Index() {
     setSearchResults(results || []);
   }, [results]);
 
+  // Process action data when it changes
+  useEffect(() => {
+    if (actionData) {
+      setIsImporting(false);
+      
+      if (actionData.success) {
+        setImportFeedback({
+          show: true,
+          success: true,
+          message: `Successfully imported ${actionData.count} bookmarks`
+        });
+      } else {
+        setImportFeedback({
+          show: true,
+          success: false,
+          message: actionData.error || 'Failed to import bookmarks'
+        });
+      }
+      
+      // Reset file input
+      resetFileInput();
+      
+      // Hide feedback after 5 seconds
+      const timer = setTimeout(() => {
+        setImportFeedback(prev => ({ ...prev, show: false }));
+      }, 5000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [actionData]);
+
   return (
     <div className="flex min-h-screen flex-col items-center p-4 md:p-8 bg-gray-50 dark:bg-gray-900">
       <div className="flex flex-col items-center gap-8 w-full max-w-4xl">
         <Card className="w-full bg-white dark:bg-gray-800 shadow-md">
-          <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-              Twitter Local Bookmarks Search
-            </CardTitle>
-            <div className="h-[100px] w-[180px] mx-auto">
-              <img
-                src="/twitter-x.png"
-                alt="Remix"
-                className="block w-full dark:hidden"
-              />
+          <CardHeader className="text-center pb-2">
+            <div className="flex flex-col md:flex-row items-center justify-center gap-4 mb-2">
+              <div className="h-[80px] w-[80px]">
+                <img
+                  src="/twitter-x.png"
+                  alt="Twitter/X"
+                  className="block w-full dark:hidden"
+                />
+              </div>
+              <CardTitle className="text-3xl font-bold text-gray-800 dark:text-gray-100 bg-gradient-to-r from-blue-500 to-indigo-600 bg-clip-text text-transparent">
+                Twitter Local Bookmarks
+              </CardTitle>
             </div>
+            <CardDescription className="text-gray-600 dark:text-gray-400 text-sm">
+              本地存储和搜索您的Twitter书签
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <InputWithButton onSearch={handleSearch} />
+            <div className="space-y-6">
+              {/* Description */}
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-100 dark:border-blue-800">
+                <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
+                  使用说明：首先用<a href="https://github.com/prinsss/twitter-web-exporter" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">twitter-web-exporter</a> 的“导出数据”功能导出JSON格式文件，然后使用本界面的“导入书签”功能。
+                </p>
+              </div>
+              
+              {/* Two column layout for search and import */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Search section */}
+                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                  <h3 className="text-sm font-medium mb-3 text-gray-700 dark:text-gray-300">搜索书签</h3>
+                  <InputWithButton onSearch={handleSearch} />
+                </div>
+                
+                {/* Import section */}
+                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                  <h3 className="text-sm font-medium mb-3 text-gray-700 dark:text-gray-300">导入书签</h3>
+                  <Form method="post" encType="multipart/form-data" className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        ref={fileInputRef}
+                        type="file"
+                        name="bookmarksFile"
+                        accept=".json"
+                        onChange={handleFileUpload}
+                        className="flex-1"
+                      />
+                      {isImporting && (
+                        <div className="w-6 h-6 border-2 border-t-blue-500 border-gray-200 rounded-full animate-spin"></div>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      上传Twitter书签的JSON文件以导入到数据库中
+                    </p>
+                  </Form>
+                  
+                  {importFeedback.show && (
+                    <div className={`mt-3 p-2 text-sm rounded ${
+                      importFeedback.success 
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300' 
+                        : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300'
+                    }`}>
+                      {importFeedback.message}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
         
@@ -529,7 +813,7 @@ export default function Index() {
           <Card className="w-full p-6 text-center">
             <div className="flex items-center justify-center">
               <div className="w-8 h-8 border-4 border-t-blue-500 border-gray-200 rounded-full animate-spin"></div>
-              <span className="ml-2">Loading results...</span>
+              <span className="ml-2">加载结果中...</span>
             </div>
           </Card>
         )}
@@ -546,10 +830,10 @@ export default function Index() {
           <div className="w-full">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">
-                Search Results
+                搜索结果
               </h2>
               <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded dark:bg-blue-900 dark:text-blue-300">
-                {searchResults.length} found
+                找到 {searchResults.length} 条结果
               </span>
             </div>
             <div className="space-y-4">
@@ -620,17 +904,13 @@ export default function Index() {
                   <CardFooter className="text-xs text-gray-500 dark:text-gray-400 pt-2">
                     <div className="flex flex-wrap justify-between w-full">
                       <div className="flex space-x-4 mb-1">
-                        <span>
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline mr-1" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                          </svg>
-                          Bookmarked
-                        </span>
+                        
                         {result.created_at && (
                           <span>
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline mr-1" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
                             </svg>
+                            收藏于
                             {new Date(result.created_at).toLocaleDateString(undefined, {
                               year: 'numeric',
                               month: 'short',
@@ -649,7 +929,7 @@ export default function Index() {
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline mr-1" viewBox="0 0 20 20" fill="currentColor">
                             <path fillRule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z" clipRule="evenodd" />
                           </svg>
-                          View on Twitter
+                          在Twitter上查看
                         </a>
                       )}
                     </div>
@@ -666,7 +946,7 @@ export default function Index() {
               <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <p className="mt-4 text-gray-500 dark:text-gray-400">No results found. Try a different search term.</p>
+              <p className="mt-4 text-gray-500 dark:text-gray-400">未找到结果，请尝试其他搜索词。</p>
             </CardContent>
           </Card>
         )}
