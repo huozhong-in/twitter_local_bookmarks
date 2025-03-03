@@ -4,10 +4,26 @@
 
 ## 运行推荐用docker
 
+### 方式一：本地构建镜像
+
 ```bash
 ./build_docker.sh
 ./run_docker.sh
 ```
+
+### 方式二：直接拉取镜像
+
+```bash
+docker run -d \
+    --name twitter-local-bookmarks \
+    -p 3315:3000 \
+    -v "$(pwd)/sqlite.db:/app/sqlite.db" \
+    -e PORT=3315 \
+    -e DB_PATH=/app/sqlite.db \
+    -e "TZ=Asia/Shanghai" \
+```
+
+打开 https://127.0.0.1:3315 即可使用
 
 ## 推荐用pnpm开发和直接运行
 

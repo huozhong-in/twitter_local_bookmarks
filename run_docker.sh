@@ -12,7 +12,7 @@ show_help() {
 
 # 默认参数
 DB_PATH="$(pwd)/sqlite.db"
-PORT=3000
+PORT=3315
 IMAGE_NAME="twitter-local-bookmarks"
 IMAGE_TAG="latest"
 CONTAINER_NAME="twitter-local-bookmarks"
