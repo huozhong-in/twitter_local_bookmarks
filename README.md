@@ -12,8 +12,11 @@
 ## 推荐用pnpm开发和直接运行
 
 安装依赖: `pnpm i`
+
 启动开发服务器: `pnpm dev`
+
 构建release文件: `pnpm build`
+
 生产环境中运行: `pnpm start`
 
 
