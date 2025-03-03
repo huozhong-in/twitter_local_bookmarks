@@ -13,29 +13,15 @@
 
 ### 方式二：直接拉取镜像
 
-```bash
-docker run -d \
-    --name twitter-local-bookmarks \
-    -p 3315:3000 \
-    -v "$(pwd)/sqlite.db:/app/sqlite.db" \
-    -e PORT=3315 \
-    -e DB_PATH=/app/sqlite.db \
-    -e "TZ=Asia/Shanghai" \
-```
+查看[Docker Hub](https://hub.docker.com/r/candozhou/twitter-local-bookmarks)上的说明
 
-打开 https://127.0.0.1:3315 即可使用
 
-## 推荐用pnpm开发和直接运行
+## 用pnpm启动开发环境
 
 安装依赖: `pnpm i`
 
-启动开发服务器: `pnpm dev`
+开发环境: `pnpm dev`
 
-构建release文件: `pnpm build`
+编译构建: `pnpm build`
 
-生产环境中运行: `pnpm start`
-
-
-## 备忘
-支持sqlite3的full_text_search 扩展
-https://github.com/wangfenjin/simple
+生产环境: `pnpm start`

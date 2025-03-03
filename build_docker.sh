@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # 设置镜像名称和标签
-IMAGE_NAME="twitter-local-bookmarks"
-IMAGE_TAG="latest"
+IMAGE_NAME="candozhou/twitter-local-bookmarks"
+IMAGE_TAG="0.0.1"
 
 echo "构建 Docker 镜像: ${IMAGE_NAME}:${IMAGE_TAG}"
 

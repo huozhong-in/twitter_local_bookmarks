@@ -1,6 +1,7 @@
 import React, { useState, ReactNode, Fragment, useEffect, useRef } from "react";
 import { useLoaderData, useSearchParams, Form, useActionData, useSubmit } from "@remix-run/react";
 import path from "path";
+import fs from "fs";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { 
@@ -110,6 +111,7 @@ async function importBookmarks(bookmarks: TwitterBookmark[]) {
     const db = new Database('./sqlite.db');
     
     // Load the libsimple extension
+    // 支持sqlite3的full_text_search 扩展 https://github.com/wangfenjin/simple
     const extPath = path.resolve("./lib");
     const platform = process.platform;
     if (platform === 'win32') {
@@ -545,6 +547,10 @@ export async function loader({ request }: { request: Request }) {
   try {
     // Connect to the SQLite database
     const dbPath = path.resolve("./sqlite.db");
+    // if ./sqlite.db file not exists, create it
+    if (!fs.existsSync(dbPath)) {
+      fs.writeFileSync(dbPath, '');
+    }
     
     // Import the createRequire function to use require in ESM
     const { createRequire } = await import('module');
@@ -566,6 +572,32 @@ export async function loader({ request }: { request: Request }) {
     // Set the jieba dictionary path
     const dictPath = path.join(extPath, "dict");
     db.prepare("SELECT jieba_dict(?)").run(dictPath);
+    // 判断如果sqlite.db 是一个空的数据库，则创建twitter_bookmarks表
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS twitter_bookmarks (
+        id TEXT PRIMARY KEY,
+        created_at TEXT,
+        full_text TEXT,
+        media TEXT,
+        screen_name TEXT,
+        name TEXT,
+        profile_image_url TEXT,
+        in_reply_to TEXT,
+        retweeted_status TEXT,
+        quoted_status TEXT,
+        favorite_count INTEGER,
+        retweet_count INTEGER,
+        bookmark_count INTEGER,
+        quote_count INTEGER,
+        reply_count INTEGER,
+        views_count INTEGER,
+        favorited INTEGER,
+        retweeted INTEGER,
+        bookmarked INTEGER,
+        url TEXT
+      );
+    `);
+
     
     // Create a virtual table for full-text search if it doesn't exist
     db.exec(`

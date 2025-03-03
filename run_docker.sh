@@ -13,8 +13,8 @@ show_help() {
 # 默认参数
 DB_PATH="$(pwd)/sqlite.db"
 PORT=3315
-IMAGE_NAME="twitter-local-bookmarks"
-IMAGE_TAG="latest"
+IMAGE_NAME="candozhou/twitter-local-bookmarks"
+IMAGE_TAG="0.0.1"
 CONTAINER_NAME="twitter-local-bookmarks"
 
 # 解析命令行参数
